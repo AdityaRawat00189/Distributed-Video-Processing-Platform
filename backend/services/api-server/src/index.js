@@ -6,6 +6,8 @@ dotenv.config();
 
 const connectDB = require("./config/mongo");
 const minioClient = require("./config/minio");
+const { connectRabbitMQ } = require("../../../shared/broker/connection");
+const setupTopology = require("../../../shared/broker/topology");
 
 const uploadRoutes = require("./routes/upload");
 
@@ -26,6 +28,14 @@ connectDB();
   }
 })();
 
+// Connect to RabbitMQ and setup topology
+async function initRabbitMQ() {
+  const channel = await connectRabbitMQ();
+  await setupTopology(channel);
+
+  console.log(`✅ RabbitMQ Initialization Complete`);
+}
+
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });
 });
@@ -33,6 +43,18 @@ app.get("/api/health", (req, res) => {
 app.use("/api", uploadRoutes);
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`🚀 Server is running on port ${PORT}`);
-});
+
+// Start server only after RabbitMQ is initialized
+async function startServer() {
+  try {
+    await initRabbitMQ();
+    app.listen(PORT, () => {
+      console.log(`🚀 Server is running on port ${PORT}`);
+    });
+  } catch (err) {
+    console.error(`❌ Failed to start server: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+startServer();

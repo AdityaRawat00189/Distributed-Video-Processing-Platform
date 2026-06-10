@@ -7,6 +7,8 @@ const Video = require('../models/video');
 
 const router = express.Router();
 
+const { publishVideoUploaded } = require('../../../../shared/broker/producers/videoPublisher');
+
 const upload = multer({
     dest: 'uploads/',
     limits: { fileSize: 500 * 1024 * 1024 }, // 500MB limit
@@ -62,11 +64,17 @@ router.post('/upload', upload.single("video"), async (req, res) => {
             }
         });
 
-        // RabbitMQ publish will come later
-        // publishVideoUploaded({
-        //   videoId: video._id,
-        //   objectKey
-        // });
+        // RabbitMQ publish 
+        try {
+            await publishVideoUploaded({
+              videoId: video._id,
+              objectKey
+            });
+            console.log(`✅ Successfully published video to queue: ${video._id}`);
+        } catch (error) {
+            console.error(`❌ Failed to publish to queue: ${error.message}`);
+            throw error;
+        }
 
         console.log(`✅ Video uploaded: ${video._id}`);
 
@@ -78,6 +86,18 @@ router.post('/upload', upload.single("video"), async (req, res) => {
 
     } catch (error) {
         console.error(`❌ Error in video upload: ${error.message}`);
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+})
+
+router.get('/all', async(req, res) => {
+    try {
+        console.log(`🔍 Fetching all videos`);
+        const videos = (await Video.find()); 
+        console.log(`✅ Fetched ${videos.length} videos`);
+        res.json({ videos });
+    } catch (error) {
+        console.error(`❌ Error fetching videos: ${error.message}`);
         res.status(500).json({ error: "Internal Server Error" });
     }
 })
