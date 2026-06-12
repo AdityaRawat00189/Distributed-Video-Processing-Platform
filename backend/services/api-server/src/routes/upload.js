@@ -90,6 +90,96 @@ router.post('/upload', upload.single("video"), async (req, res) => {
     }
 })
 
+// Get HLS stream with presigned URLs for segments
+router.get('/stream/:id', async(req, res) => {
+    try {
+        const videoId = req.params.id;
+        const video = await Video.findById(videoId);
+
+        if(!video){
+            return res.status(404)
+            .json({
+                error:"Video not found"
+            });
+        }
+
+        if(video.status !== "DONE"){
+            return res.status(400)
+            .json({
+                error:
+                "Video still processing"
+            });
+        }
+
+        console.log(`🔍 Fetching HLS playlist for streaming: ${videoId}`);
+
+        try {
+            // Fetch the playlist from MinIO
+            const playlistStream = await minioClient.getObject(
+                "videos",
+                video.streamPath
+            );
+
+            let playlistContent = '';
+            
+            playlistStream.on('data', (chunk) => {
+                playlistContent += chunk.toString();
+            });
+
+            playlistStream.on('end', async () => {
+                try {
+                    // Parse playlist and replace segment references with presigned URLs
+                    const lines = playlistContent.split('\n');
+                    const baseDir = `processed/${videoId}`;
+                    const modifiedLines = [];
+
+                    for (const line of lines) {
+                        if (line && !line.startsWith('#') && line.trim()) {
+                            // This is a segment filename
+                            const segmentPath = `${baseDir}/${line.trim()}`;
+                            const presignedUrl = await minioClient.presignedGetObject(
+                                "videos",
+                                segmentPath,
+                                60 * 60 // 1 hour expiry
+                            );
+                            modifiedLines.push(presignedUrl);
+                        } else {
+                            modifiedLines.push(line);
+                        }
+                    }
+
+                    const modifiedPlaylist = modifiedLines.join('\n');
+
+                    res.set({
+                        'Content-Type': 'application/vnd.apple.mpegurl',
+                        'Access-Control-Allow-Origin': '*',
+                        'Cache-Control': 'no-cache, no-store, must-revalidate',
+                        'Pragma': 'no-cache',
+                        'Expires': '0'
+                    });
+                    res.send(modifiedPlaylist);
+                } catch (err) {
+                    console.error(`❌ Error processing playlist: ${err.message}`);
+                    res.status(500).json({ error: "Error processing playlist" });
+                }
+            });
+
+            playlistStream.on('error', (err) => {
+                console.error(`❌ Error reading playlist from MinIO: ${err.message}`);
+                res.status(500).json({ error: "Error reading playlist" });
+            });
+        } catch (err) {
+            console.error(`❌ Error accessing MinIO: ${err.message}`);
+            res.status(500).json({ error: "Error accessing video stream" });
+        }
+
+    } catch (error) {
+        console.error(`❌ Error in stream endpoint ${req.params.id}: ${error.message}`);
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+})
+
+
 router.get('/all', async(req, res) => {
     try {
         console.log(`🔍 Fetching all videos`);

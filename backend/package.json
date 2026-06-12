@@ -1,5 +1,6 @@
 {
   "dependencies": {
-    "amqplib": "^2.0.1"
+    "amqplib": "^2.0.1",
+    "minio": "^8.0.7"
   }
 }

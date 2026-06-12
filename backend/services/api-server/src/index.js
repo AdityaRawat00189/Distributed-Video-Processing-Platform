@@ -12,7 +12,15 @@ const setupTopology = require("../../../shared/broker/topology");
 const uploadRoutes = require("./routes/upload");
 
 const app = express();
-app.use(cors());
+
+// CORS configuration for streaming
+app.use(cors({
+  origin: '*',
+  credentials: true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json());
 
 // Connect to MongoDB
@@ -40,7 +48,7 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
-app.use("/api", uploadRoutes);
+app.use("/api/upload", uploadRoutes);
 
 const PORT = process.env.PORT || 5000;
 
