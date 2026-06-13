@@ -25,6 +25,8 @@ const videoSchema = new mongoose.Schema({
     originalPath : String,
 
     transcodedPath : String,
+
+    thumbnailPath : String,
     
     streamPath: String
 

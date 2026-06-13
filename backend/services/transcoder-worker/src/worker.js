@@ -7,6 +7,7 @@ const { downloadVideo } = require('./downloader');
 const { transcodeToHLS } = require('./ffmpeg');
 const { uploadHLSFiles } = require('./uploader');
 const { cleanup } = require('./cleanup');
+const { publishVideoTranscoded } = require('../../../shared/broker/producers/thumbnailPublisher');
 
 async function startWorker() {
     try {
@@ -29,7 +30,7 @@ async function startWorker() {
                 const content = JSON.parse(msg.content.toString());
                 console.log(`✅ Received message from queue ${VIDEO_TRANSCODED_QUEUE}:`, content);
 
-                const { videoId } = content;
+                const { videoId, objectKey } = content;
                 console.log(`videoId : ${videoId}`);
                 
                 await Video.findByIdAndUpdate(videoId, {
@@ -48,6 +49,10 @@ async function startWorker() {
                 await Video.findByIdAndUpdate(videoId, {
                     status: "DONE",
                     streamPath: `processed/${videoId}/playlist.m3u8`
+                });
+
+                await publishVideoTranscoded({
+                    videoId, objectKey
                 });
 
                 channel.ack(msg);

@@ -3,4 +3,5 @@ module.exports = {
     VIDEO_UPLOADED: 'video.uploaded', 
     VIDEO_TRANSCODED_QUEUE: 'video.transcoded.queue',
     VIDEO_TRANSCODED: 'video.transcoded',
+    THUMBNAIL_QUEUE: 'thumbnail.generate.queue'
 };

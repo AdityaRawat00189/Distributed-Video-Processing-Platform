@@ -192,4 +192,15 @@ router.get('/all', async(req, res) => {
     }
 })
 
+router.get('/delete', async(req, res) => {
+    try {
+        const result = await Video.deleteMany({});
+        console.log(`✅ Deleted ${result.deletedCount} videos`);
+        res.json("Videos Deleted");
+    } catch (error) {
+        console.error(`❌ Error Deleting All videos: ${error.message}`);
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+})
+
 module.exports = router;
