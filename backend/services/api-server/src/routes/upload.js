@@ -192,6 +192,34 @@ router.get('/all', async(req, res) => {
     }
 })
 
+router.get('/thumbnail/:id', async(req,res) => {
+    try {
+        const video = await Video.findById(req.params.id);
+
+        console.log("✅ Thumbnail Route called");
+
+        if (!video || !video.thumbnailPath) {
+            return res.status(404).json({
+                message: "Thumbnail not found"
+            });
+        }
+
+        const stream = await minioClient.getObject(
+            "videos",
+            video.thumbnailPath
+        );
+
+        res.setHeader("Content-Type", "image/jpeg");
+
+        stream.pipe(res);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({
+            message: "Internal Server Error"
+        });
+    }
+})
+
 router.get('/delete', async(req, res) => {
     try {
         const result = await Video.deleteMany({});
