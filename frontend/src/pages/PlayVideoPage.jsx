@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
+import Hls from 'hls.js'
 
 const API = 'http://localhost:5000/api/upload'
 
@@ -68,8 +69,48 @@ function Scrubber({ progress, onSeek, buffered }) {
   )
 }
 
+/* ─── Resolution picker popover ───────────────────────────────── */
+function ResolutionMenu({ levels, currentLevel, onSelect, onClose }) {
+  return (
+    <div style={S.resMenuWrap}>
+      {/* backdrop to catch outside clicks */}
+      <div style={S.resMenuBackdrop} onClick={onClose} />
+      <div style={S.resMenu}>
+        <div style={S.resMenuHeader}>Quality</div>
+        <button
+          style={{ ...S.resMenuItem, color: currentLevel === -1 ? '#fff' : '#94A3B8' }}
+          onClick={() => { onSelect(-1); onClose() }}
+        >
+          <span>Auto</span>
+          {currentLevel === -1 && <span style={S.resMenuCheck}>✓</span>}
+        </button>
+        {levels.map((lvl, idx) => (
+          <button
+            key={idx}
+            style={{ ...S.resMenuItem, color: currentLevel === idx ? '#fff' : '#94A3B8' }}
+            onClick={() => { onSelect(idx); onClose() }}
+          >
+            <span>{lvl.height ? `${lvl.height}p` : lvl.name || `Level ${idx}`}</span>
+            {currentLevel === idx && <span style={S.resMenuCheck}>✓</span>}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 /* ─── Custom player controls ──────────────────────────────────── */
-function PlayerControls({ videoEl, playing, progress, duration, volume, muted, buffered, onTogglePlay, onSeek, onVolume, onMute, onFullscreen, fullscreen }) {
+function PlayerControls({
+  videoEl, playing, progress, duration, volume, muted, buffered,
+  onTogglePlay, onSeek, onVolume, onMute, onFullscreen, fullscreen,
+  levels, currentLevel, activeLevel, onSelectLevel, videoId,
+}) {
+  const [resMenuOpen, setResMenuOpen] = useState(false)
+
+  const activeLabel = currentLevel === -1
+    ? (activeLevel != null && levels[activeLevel]?.height ? `Auto (${levels[activeLevel].height}p)` : 'Auto')
+    : (levels[currentLevel]?.height ? `${levels[currentLevel].height}p` : 'Quality')
+
   return (
     <div style={S.controls}>
       <Scrubber progress={progress} buffered={buffered} onSeek={pct => { if (videoEl) videoEl.currentTime = pct * (videoEl.duration || 0) }} />
@@ -99,7 +140,27 @@ function PlayerControls({ videoEl, playing, progress, duration, volume, muted, b
 
         {/* Right */}
         <div style={S.ctrlRight}>
-          <a href={`${API}/stream/${videoEl?.src?.split('/').pop()}`} download style={{ ...S.ctrlBtn, textDecoration: 'none' }} title="Download">
+          {levels.length > 0 && (
+            <div style={{ position: 'relative' }}>
+              <button
+                style={{ ...S.ctrlBtn, width: 'auto', padding: '0 10px', gap: 6, display: 'flex' }}
+                onClick={() => setResMenuOpen(v => !v)}
+                title="Quality"
+              >
+                <span style={S.ctrlBtnIcon}>⚙</span>
+                <span style={{ fontSize: 11, fontWeight: 600 }}>{activeLabel}</span>
+              </button>
+              {resMenuOpen && (
+                <ResolutionMenu
+                  levels={levels}
+                  currentLevel={currentLevel}
+                  onSelect={onSelectLevel}
+                  onClose={() => setResMenuOpen(false)}
+                />
+              )}
+            </div>
+          )}
+          <a href={`${API}/stream/${videoId}`} download style={{ ...S.ctrlBtn, textDecoration: 'none' }} title="Download">
             <span style={S.ctrlBtnIcon}>⬇</span>
           </a>
           <button style={S.ctrlBtn} onClick={onFullscreen} title="Fullscreen">
@@ -148,6 +209,7 @@ function RelatedCard({ video, current }) {
 export default function PlayVideoPage() {
   const { id }                      = useParams()
   const videoRef                    = useRef()
+  const hlsRef                      = useRef(null)
   const playerWrapRef               = useRef()
   const [video, setVideo]           = useState(null)
   const [allVideos, setAllVideos]   = useState([])
@@ -165,6 +227,11 @@ export default function PlayVideoPage() {
   const [tab, setTab]               = useState('info')
   const controlsTimer               = useRef()
 
+  // HLS quality state
+  const [levels, setLevels]             = useState([])     // hls.js level objects
+  const [currentLevel, setCurrentLevel] = useState(-1)      // -1 = auto, else index user picked
+  const [activeLevel, setActiveLevel]   = useState(null)    // index actually playing right now
+
   useEffect(() => {
     setLoading(true); setError('')
     fetch(`${API}/all`)
@@ -180,12 +247,76 @@ export default function PlayVideoPage() {
       .catch(e => { setError(e.message); setLoading(false) })
   }, [id])
 
+  // Attach HLS source (works for both single-variant playlists and
+  // multi-variant master playlists — hls.js parses either fine)
   useEffect(() => {
     const el = videoRef.current
     if (!el || !video) return
-    el.src = `${API}/stream/${id}`
+
     el.volume = volume
-    el.load()
+
+    // reset quality state for the new source
+    setLevels([])
+    setCurrentLevel(-1)
+    setActiveLevel(null)
+
+    const streamUrl = `${API}/stream/${id}`
+
+    // Tear down any previous instance before attaching a new one
+    if (hlsRef.current) {
+      hlsRef.current.destroy()
+      hlsRef.current = null
+    }
+
+    if (Hls.isSupported()) {
+      const hls = new Hls({
+        // keep variant playlists fresh server-side, see backend notes
+        maxBufferLength: 30,
+      })
+      hlsRef.current = hls
+
+      hls.on(Hls.Events.MANIFEST_PARSED, (_evt, data) => {
+        setLevels(data.levels || [])
+      })
+
+      hls.on(Hls.Events.LEVEL_SWITCHED, (_evt, data) => {
+        setActiveLevel(data.level)
+      })
+
+      hls.on(Hls.Events.ERROR, (_evt, data) => {
+        if (!data.fatal) return
+        switch (data.type) {
+          case Hls.ErrorTypes.NETWORK_ERROR:
+            console.error('HLS network error, retrying load…', data)
+            hls.startLoad()
+            break
+          case Hls.ErrorTypes.MEDIA_ERROR:
+            console.error('HLS media error, attempting recovery…', data)
+            hls.recoverMediaError()
+            break
+          default:
+            console.error('HLS fatal error, destroying instance', data)
+            hls.destroy()
+            break
+        }
+      })
+
+      hls.loadSource(streamUrl)
+      hls.attachMedia(el)
+    } else if (el.canPlayType('application/vnd.apple.mpegurl')) {
+      // Safari: native HLS support, no per-level switching via hls.js
+      el.src = streamUrl
+      el.load()
+    } else {
+      console.error('HLS is not supported in this browser')
+    }
+
+    return () => {
+      if (hlsRef.current) {
+        hlsRef.current.destroy()
+        hlsRef.current = null
+      }
+    }
   }, [video, id])
 
   const onTimeUpdate = () => {
@@ -219,6 +350,12 @@ export default function PlayVideoPage() {
     const el = playerWrapRef.current
     if (!document.fullscreenElement) { el.requestFullscreen?.(); setFullscreen(true) }
     else { document.exitFullscreen?.(); setFullscreen(false) }
+  }
+
+  const selectLevel = (idx) => {
+    if (!hlsRef.current) return
+    hlsRef.current.currentLevel = idx // -1 = back to auto-ABR
+    setCurrentLevel(idx)
   }
 
   // Auto-hide controls
@@ -314,6 +451,11 @@ export default function PlayVideoPage() {
                 onMute={toggleMute}
                 onFullscreen={toggleFullscreen}
                 fullscreen={fullscreen}
+                levels={levels}
+                currentLevel={currentLevel}
+                activeLevel={activeLevel}
+                onSelectLevel={selectLevel}
+                videoId={id}
               />
             </div>
           </div>
@@ -369,6 +511,7 @@ export default function PlayVideoPage() {
                   { label: 'Thumbnail URL', val: `${API}/thumbnail/${id}`,    mono: true, accent: '#7C3AED' },
                   { label: 'Video ID',      val: id,                          mono: true, accent: '#a78bfa' },
                   { label: 'Status',        val: video.status || 'unknown',   mono: false, accent: meta.color },
+                  { label: 'Variants',      val: video.variants?.length ? video.variants.map(v => v.resolution).join(', ') : 'Single quality', mono: false, accent: '#a78bfa' },
                 ].map(row => (
                   <div key={row.label} style={S.techRow}>
                     <span style={S.techLabel}>{row.label}</span>
@@ -524,6 +667,32 @@ const S = {
     fontFamily: 'var(--font-mono)', letterSpacing: '0.03em',
     marginLeft: 8,
   },
+
+  /* Resolution picker */
+  resMenuWrap: { position: 'absolute', bottom: 42, right: 0, zIndex: 20 },
+  resMenuBackdrop: { position: 'fixed', inset: 0, zIndex: 19 },
+  resMenu: {
+    position: 'relative', zIndex: 20,
+    minWidth: 140,
+    background: '#161B26',
+    border: '1px solid rgba(255,255,255,0.1)',
+    borderRadius: 10,
+    padding: 6,
+    boxShadow: '0 12px 32px rgba(0,0,0,0.5)',
+    display: 'flex', flexDirection: 'column', gap: 2,
+  },
+  resMenuHeader: {
+    fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+    color: '#475569', padding: '4px 8px 6px',
+  },
+  resMenuItem: {
+    background: 'none', border: 'none', cursor: 'pointer',
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    fontSize: 13, fontWeight: 500,
+    padding: '7px 8px', borderRadius: 6,
+    textAlign: 'left',
+  },
+  resMenuCheck: { color: '#7C3AED', fontSize: 12, fontWeight: 700 },
 
   /* Info panel */
   infoPanel: {

@@ -28,7 +28,22 @@ const videoSchema = new mongoose.Schema({
 
     thumbnailPath : String,
     
-    streamPath: String
+    // streamPath: String,
+    streamPath: String,
+
+    variants: [
+    {
+        resolution: {
+            type: String,
+            enum: ["360p", "720p", "1080p"],
+            required: true
+        },
+        playlist: {
+            type: String,
+            required: true
+        }
+    }
+    ]
 
 }, { timestamps : true});
 

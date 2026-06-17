@@ -3,35 +3,31 @@ const path = require('path');
 
 const minioClient = require('../../../shared/storage/minio');
 
-async function uploadHLSFiles(
-    videoId,
-    outputDir
-) {
+async function uploadDirectory(localDir, remoteDir) {
+    const entries = fs.readdirSync(localDir, {
+        withFileTypes: true
+    });
 
-    const files = fs.readdirSync(outputDir);
+    for (const entry of entries) {
+        const localPath = path.join(localDir, entry.name);
 
-    for(const file of files){
+        if (entry.isDirectory()) {
+            await uploadDirectory(localPath,`${remoteDir}/${entry.name}`);
+        } else {
+            const objectKey =`${remoteDir}/${entry.name}`;
 
-        const filePath =
-            path.join(
-                outputDir,
-                file
-            );
+            await minioClient.fPutObject("videos",objectKey,localPath);
 
-        const objectKey =
-            `processed/${videoId}/${file}`;
-
-        await minioClient.fPutObject(
-            "videos",
-            objectKey,
-            filePath
-        );
-
-        console.log(
-            "Uploaded:",
-            objectKey
-        );
+            console.log(`✅ Uploaded ${objectKey}`);
+        }
     }
+}
+
+async function uploadHLSFiles(videoId, outputDir) {
+    await uploadDirectory(
+        outputDir,
+        `processed/${videoId}`
+    );
 }
 
 module.exports = {

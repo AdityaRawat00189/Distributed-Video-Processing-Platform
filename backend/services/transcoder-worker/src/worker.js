@@ -1,13 +1,45 @@
+const path = require("path");
+
 const { connectRabbitMQ } = require('../../../shared/broker/connection');
 const { VIDEO_TRANSCODED_QUEUE } = require('../../../shared/broker/queue');
 
 const Video = require('../../api-server/src/models/video');
 const connectDB = require('../../api-server/src/config/mongo');  // Need to be shifted to Shared 
 const { downloadVideo } = require('./downloader');
-const { transcodeToHLS } = require('./ffmpeg');
+const { generateHLSVariant } = require('./ffmpeg');
 const { uploadHLSFiles } = require('./uploader');
 const { cleanup } = require('./cleanup');
 const { publishVideoTranscoded } = require('../../../shared/broker/producers/thumbnailPublisher');
+const { createMasterPlaylist } = require('./masterPlaylist');
+
+
+async function transcodeToHLS(videoId, inputPath) {
+    const baseOutput = path.join(__dirname, "../output", videoId);
+
+    const variants = [
+        { res: 360, dir: path.join(baseOutput, "360p") },
+        { res: 720, dir: path.join(baseOutput, "720p") },
+        { res: 1080, dir: path.join(baseOutput, "1080p") }
+    ];
+
+    // const results = [];
+    const results = await Promise.all(
+        variants.map(async (v) => {
+            const playlist = await generateHLSVariant(inputPath,v.dir,v.res);
+
+            return {
+                resolution: `${v.res}p`,
+                playlist
+            };
+        })
+    );
+
+    const masterPlaylist = createMasterPlaylist(videoId, baseOutput);
+
+    return {output: baseOutput, masterPlaylist, varients: results}
+}
+
+
 
 async function startWorker() {
     try {
@@ -40,16 +72,40 @@ async function startWorker() {
                 localVideoPath = await downloadVideo(content);
                 console.log(`✅ Video Downloaded Successfully at ${localVideoPath}`);
 
-                outputDir = await transcodeToHLS(videoId, localVideoPath);
-                console.log(`✅ HLS Generated at ${outputDir}`);
+                // outputDir = await transcodeToHLS(videoId, localVideoPath);
+                // console.log(`✅ HLS Generated at ${outputDir}`);
+                const { output, masterPlaylist, variants} = await transcodeToHLS(videoId, localVideoPath);
+                outputDir = output;
+                console.log(`✅ HLS Varient Generated at ${outputDir}`);
+                console.log("Master:", masterPlaylist);
+                console.log("Variants:", variants);
 
                 await uploadHLSFiles(videoId, outputDir);
                 console.log(`✅ HLS Stored in minIO`);
 
-                await Video.findByIdAndUpdate(videoId, {
-                    status: "DONE",
-                    streamPath: `processed/${videoId}/playlist.m3u8`
+                await Video.findByIdAndUpdate(videoId, { status: "DONE",
+                    streamPath: `processed/${videoId}/master.m3u8`,
+
+                    variants: [
+                        {
+                            resolution: "360p",
+                            playlist: `processed/${videoId}/360p/playlist_360p.m3u8`
+                        },
+                        {
+                            resolution: "720p",
+                            playlist: `processed/${videoId}/720p/playlist_720p.m3u8`
+                        },
+                        {
+                            resolution: "1080p",
+                            playlist: `processed/${videoId}/1080p/playlist_1080p.m3u8`
+                        }
+                    ]
                 });
+
+                // await Video.findByIdAndUpdate(videoId, {
+                //     status: "DONE",
+                //     streamPath: `processed/${videoId}/playlist.m3u8`
+                // });
 
                 await publishVideoTranscoded({
                     videoId, objectKey

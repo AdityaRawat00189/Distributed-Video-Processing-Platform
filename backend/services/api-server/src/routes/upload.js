@@ -91,90 +91,220 @@ router.post('/upload', upload.single("video"), async (req, res) => {
 })
 
 // Get HLS stream with presigned URLs for segments
-router.get('/stream/:id', async(req, res) => {
-    try {
-        const videoId = req.params.id;
-        const video = await Video.findById(videoId);
+// router.get('/stream/:id', async(req, res) => {
+//     try {
+//         const videoId = req.params.id;
+//         const video = await Video.findById(videoId);
 
-        if(!video){
-            return res.status(404)
-            .json({
-                error:"Video not found"
-            });
-        }
+//         if(!video){
+//             return res.status(404)
+//             .json({
+//                 error:"Video not found"
+//             });
+//         }
 
-        if(video.status !== "DONE"){
-            return res.status(400)
-            .json({
-                error:
-                "Video still processing"
-            });
-        }
+//         if(video.status !== "DONE"){
+//             return res.status(400)
+//             .json({
+//                 error:
+//                 "Video still processing"
+//             });
+//         }
 
-        console.log(`🔍 Fetching HLS playlist for streaming: ${videoId}`);
+//         console.log(`🔍 Fetching HLS playlist for streaming: ${videoId}`);
 
-        try {
-            // Fetch the playlist from MinIO
-            const playlistStream = await minioClient.getObject(
-                "videos",
-                video.streamPath
-            );
+//         try {
+//             // Fetch the playlist from MinIO
+//             const playlistStream = await minioClient.getObject(
+//                 "videos",
+//                 video.streamPath
+//             );
 
-            let playlistContent = '';
+//             let playlistContent = '';
             
-            playlistStream.on('data', (chunk) => {
-                playlistContent += chunk.toString();
-            });
+//             playlistStream.on('data', (chunk) => {
+//                 playlistContent += chunk.toString();
+//             });
 
-            playlistStream.on('end', async () => {
-                try {
-                    // Parse playlist and replace segment references with presigned URLs
-                    const lines = playlistContent.split('\n');
-                    const baseDir = `processed/${videoId}`;
-                    const modifiedLines = [];
+//             playlistStream.on('end', async () => {
+//                 try {
+//                     // Parse playlist and replace segment references with presigned URLs
+//                     const lines = playlistContent.split('\n');
+//                     const baseDir = `processed/${videoId}`;
+//                     const modifiedLines = [];
 
-                    for (const line of lines) {
-                        if (line && !line.startsWith('#') && line.trim()) {
-                            // This is a segment filename
-                            const segmentPath = `${baseDir}/${line.trim()}`;
-                            const presignedUrl = await minioClient.presignedGetObject(
-                                "videos",
-                                segmentPath,
-                                60 * 60 // 1 hour expiry
-                            );
-                            modifiedLines.push(presignedUrl);
-                        } else {
-                            modifiedLines.push(line);
-                        }
-                    }
+//                     for (const line of lines) {
+//                         if (line && !line.startsWith('#') && line.trim()) {
+//                             // This is a segment filename
+//                             const segmentPath = `${baseDir}/${line.trim()}`;
+//                             const presignedUrl = await minioClient.presignedGetObject(
+//                                 "videos",
+//                                 segmentPath,
+//                                 60 * 60 // 1 hour expiry
+//                             );
+//                             modifiedLines.push(presignedUrl);
+//                         } else {
+//                             modifiedLines.push(line);
+//                         }
+//                     }
 
-                    const modifiedPlaylist = modifiedLines.join('\n');
+//                     const modifiedPlaylist = modifiedLines.join('\n');
 
-                    res.set({
-                        'Content-Type': 'application/vnd.apple.mpegurl',
-                        'Access-Control-Allow-Origin': '*',
-                        'Cache-Control': 'no-cache, no-store, must-revalidate',
-                        'Pragma': 'no-cache',
-                        'Expires': '0'
-                    });
-                    res.send(modifiedPlaylist);
-                } catch (err) {
-                    console.error(`❌ Error processing playlist: ${err.message}`);
-                    res.status(500).json({ error: "Error processing playlist" });
-                }
-            });
+//                     res.set({
+//                         'Content-Type': 'application/vnd.apple.mpegurl',
+//                         'Access-Control-Allow-Origin': '*',
+//                         'Cache-Control': 'no-cache, no-store, must-revalidate',
+//                         'Pragma': 'no-cache',
+//                         'Expires': '0'
+//                     });
+//                     res.send(modifiedPlaylist);
+//                 } catch (err) {
+//                     console.error(`❌ Error processing playlist: ${err.message}`);
+//                     res.status(500).json({ error: "Error processing playlist" });
+//                 }
+//             });
 
-            playlistStream.on('error', (err) => {
-                console.error(`❌ Error reading playlist from MinIO: ${err.message}`);
-                res.status(500).json({ error: "Error reading playlist" });
-            });
-        } catch (err) {
-            console.error(`❌ Error accessing MinIO: ${err.message}`);
-            res.status(500).json({ error: "Error accessing video stream" });
+//             playlistStream.on('error', (err) => {
+//                 console.error(`❌ Error reading playlist from MinIO: ${err.message}`);
+//                 res.status(500).json({ error: "Error reading playlist" });
+//             });
+//         } catch (err) {
+//             console.error(`❌ Error accessing MinIO: ${err.message}`);
+//             res.status(500).json({ error: "Error accessing video stream" });
+//         }
+
+//     } catch (error) {
+//         console.error(`❌ Error in stream endpoint ${req.params.id}: ${error.message}`);
+//         res.status(500).json({ error: "Internal Server Error" });
+//     }
+// })
+
+router.get('/stream/:id', async (req, res) => {
+    try {
+        const id = req.params.id;
+
+        const video = await Video.findById(id);
+        
+        if (!video) {
+            return res.status(404).json({error: 'Video not found'});
         }
 
+        if(video.status !== "DONE") {
+            return res.status(400).json({error: "Video is Trancoding"});
+        }
+
+
+        console.log(`🔍 Fetching HLS playlist for streaming: ${video}`);
+
+        const playlistStream = await minioClient.getObject("videos", video.streamPath);
+
+        let content = '';
+        playlistStream.on('data', chunks => {
+            content += chunks.toString();
+        })
+
+        playlistStream.on('end', () => {
+
+            const lines = content.split('\n');
+
+            const modifiedLines = lines.map(line => {
+
+                if ( line.trim() && !line.startsWith('#') && line.includes('.m3u8')) {
+
+                    const resolution = line.split('/')[0];
+
+                    return `${req.protocol}://${req.get('host')}/api/upload/variant/${id}/${resolution}`;
+                }
+
+                return line;
+            });
+
+            res.set({
+                'Content-Type':
+                'application/vnd.apple.mpegurl'
+            });
+
+            res.send(modifiedLines.join('\n'));
+        });
+
+        playlistStream.on('error', (err) => {
+            console.error(`❌ Error reading playlist from MinIO: ${err.message}`);
+            res.status(500).json({ error: "Error reading playlist" });
+        });
     } catch (error) {
         console.error(`❌ Error in stream endpoint ${req.params.id}: ${error.message}`);
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+})
+
+router.get('/variant/:id/:resolution', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const resolution = req.params.resolution;
+        
+        const video = await Video.findById(id);
+
+        if(!video) {
+            return res.status(404).json({error: 'Video not found'});
+        }
+        if(video.status !== "DONE") {
+            return res.status(400).json({error: "Video is Trancoding"});
+        }
+
+        const variant = video.variants.find(v => v.resolution == resolution);
+
+        if(!variant) {
+            return res.status(404).json({error : 'Varient not Found'});
+        }
+
+        console.log(`🔍 Fetching HLS playlist for streaming for resolution ${resolution} : ${variant}`);
+
+        const playlistStream = await minioClient.getObject("videos", variant.playlist);
+
+        let content = '';
+
+        playlistStream.on('data', chunks => {
+            content += chunks.toString();
+        })
+
+        playlistStream.on('end', async () => {
+
+            try {
+
+                const lines = content.split('\n');
+
+                const modifiedLines = [];
+
+                const baseDir = variant.playlist.split('/').slice(0, -1).join('/');
+
+                for (const line of lines) {
+                    if ( line.trim() && !line.startsWith('#')) {
+                        const segmentPath = `${baseDir}/${line.trim()}`;
+
+                        const url =await minioClient.presignedGetObject("videos",segmentPath,60 * 60);
+
+                        modifiedLines.push(url);
+
+                    } else {
+                        modifiedLines.push(line);
+                    }
+                }
+
+                res.set({
+                    'Content-Type':
+                    'application/vnd.apple.mpegurl'
+                });
+
+                res.send(modifiedLines.join('\n'));
+
+            } catch (err) {
+                console.error(err);
+                res.status(500).json({error:'Error processing playlist'});
+            }
+
+        });
+    } catch (error) {
+        console.error(`❌ Error in variant stream endpoint ${req.params.id} for resolution ${req.params.resolution}: ${error.message}`);
         res.status(500).json({ error: "Internal Server Error" });
     }
 })
@@ -191,6 +321,7 @@ router.get('/all', async(req, res) => {
         res.status(500).json({ error: "Internal Server Error" });
     }
 })
+
 
 router.get('/thumbnail/:id', async(req,res) => {
     try {
@@ -223,6 +354,20 @@ router.get('/thumbnail/:id', async(req,res) => {
 router.get('/delete', async(req, res) => {
     try {
         const result = await Video.deleteMany({});
+        const objectStream = await minioClient.listObjects("videos", "", true);
+        const object = [];
+
+        for await(const obj of objectStream) {
+            object.push(obj.name);
+        } 
+
+        if (object.length > 0) {
+            await minioClient.removeObjects("videos", object);
+            return res.json({ message: `Deleted ${object.length} objects from videos` });
+        } else {
+            return res.json({ message: "Bucket already empty" });
+        }
+
         console.log(`✅ Deleted ${result.deletedCount} videos`);
         res.json("Videos Deleted");
     } catch (error) {
