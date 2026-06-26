@@ -102,9 +102,9 @@ async function startWorker() {
                 await uploadHLSFiles(videoId, outputDir);
                 console.log(`✅ HLS Stored in minIO`);
 
-                await Video.findByIdAndUpdate(videoId, { status: "DONE",
+                await Video.findByIdAndUpdate(videoId, {
+                    status: "DONE",
                     streamPath: `processed/${videoId}/master.m3u8`,
-
                     variants: [
                         {
                             resolution: "360p",
@@ -119,11 +119,6 @@ async function startWorker() {
                             playlist: `processed/${videoId}/1080p/playlist_1080p.m3u8`
                         }
                     ]
-                });
-
-                await Video.findByIdAndUpdate(videoId, {
-                    status: "DONE",
-                    streamPath: `processed/${videoId}/playlist.m3u8`
                 });
 
                 await publishVideoTranscoded({
