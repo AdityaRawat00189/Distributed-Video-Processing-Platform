@@ -8,6 +8,9 @@ const connectDB = require("./config/mongo");
 const minioClient = require("./config/minio");
 const { connectRabbitMQ } = require("../../../shared/broker/connection");
 const setupTopology = require("../../../shared/broker/topology");
+const { connectRedis } = require("../../../shared/redis/client");
+
+connectRedis();
 
 const uploadRoutes = require("./routes/upload");
 
@@ -40,7 +43,7 @@ connectDB();
 async function initRabbitMQ() {
   const channel = await connectRabbitMQ();
   await setupTopology(channel);
-
+  
   console.log(`✅ RabbitMQ Initialization Complete`);
 }
 

@@ -3,6 +3,10 @@ const path = require("path");
 const { connectRabbitMQ } = require('../../../shared/broker/connection');
 const { VIDEO_TRANSCODED_QUEUE } = require('../../../shared/broker/queue');
 
+const { connectRedis } = require("../../../shared/redis/client");
+connectRedis();
+const { acquireLock, releaseLock } = require("../../../shared/redis/distributedLock");
+
 const Video = require('../../api-server/src/models/video');
 const connectDB = require('../../api-server/src/config/mongo');  // Need to be shifted to Shared 
 const { downloadVideo } = require('./downloader');
@@ -57,6 +61,9 @@ async function startWorker() {
             // Move these INSIDE so they are unique to each message being processed
             let localVideoPath, outputDir; 
 
+            // Key for the redis
+            let lockKey;
+
             // Inner try/catch/finally handles the actual message processing
             try {
                 const content = JSON.parse(msg.content.toString());
@@ -64,6 +71,18 @@ async function startWorker() {
 
                 const { videoId, objectKey } = content;
                 console.log(`videoId : ${videoId}`);
+
+                lockKey = `lock:video:${videoId}`;
+                const lockToken = await acquireLock(lockKey, 600);
+
+                if (!lockToken) {
+                    console.log("❌ Already Processing the Same Video");
+                    channel.ack(msg);
+                    return;
+                }
+
+                console.log("✅ LOCK ACQUIRED");
+                msg.lockToken = lockToken;
                 
                 await Video.findByIdAndUpdate(videoId, {
                     status: "TRANSCODING"
@@ -102,10 +121,10 @@ async function startWorker() {
                     ]
                 });
 
-                // await Video.findByIdAndUpdate(videoId, {
-                //     status: "DONE",
-                //     streamPath: `processed/${videoId}/playlist.m3u8`
-                // });
+                await Video.findByIdAndUpdate(videoId, {
+                    status: "DONE",
+                    streamPath: `processed/${videoId}/playlist.m3u8`
+                });
 
                 await publishVideoTranscoded({
                     videoId, objectKey
@@ -115,9 +134,13 @@ async function startWorker() {
                 
             } catch (error) {
                 console.error(`❌ Message Processing Error: ${error.message}`);
-                // Now msg is in scope, so nack() will work correctly
                 channel.nack(msg, false, false); 
             } finally {
+                if (lockKey && msg.lockToken) {
+                    console.log("✅ LOCK RELEASED");
+                    await releaseLock(lockKey, msg.lockToken);
+                }
+
                 // This now runs after EACH individual video finishes or fails
                 if (localVideoPath || outputDir) {
                     cleanup(localVideoPath, outputDir);
